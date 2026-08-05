@@ -142,7 +142,10 @@ revision_note: "P0/P1/P2 修复：报告解析器重写（按动作名配对、�
 
 ## Inputs
 
-- 飞书 Base token（已知：`<YOUR_BASE_TOKEN>`）
+- 飞书 Base token 与表 ID —— 读 `config.json`（照 `config.example.json` 填，不入库）
+- **本机私有信息**（用户称呼、Obsidian vault 绝对路径、workspace 位置）—— 见 `LOCAL.md`。
+  这个文件不在版本库里；文档正文里凡是 `<YOUR_VAULT>` / `<WORKSPACE>` 这类占位符，
+  **一律去 `LOCAL.md` 取真值，不要照着占位符拼路径**。没有 `LOCAL.md` 就问用户。
 - 用户口头报数
 - 历史训练数据（来自 Base）
 

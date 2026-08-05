@@ -14,7 +14,9 @@
 
 ⚠️ iCloud 同步目录,路径含空格,shell 里务必加引号。
 
-Vault 根下还有 `Eric Vault` 和 `Clippings`,**健身内容只进 `Obsidian Vault/20 Areas/健身/`**。
+同一个 iCloud 目录下可能并存多个 vault,**健身内容只进上面这一个目录**,别散到别的 vault 去。
+
+> 本机的实际 vault 名和绝对路径写在 `LOCAL.md`(未纳入版本库)。
 
 ---
 
