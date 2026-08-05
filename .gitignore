@@ -1,0 +1,7 @@
+# 自己的 Base token 和表 ID，绝不进版本库
+config.json
+
+__pycache__/
+*.pyc
+.snapshots/
+.DS_Store

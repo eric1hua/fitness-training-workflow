@@ -1,0 +1,10 @@
+{
+  "base_token": "填你自己的飞书多维表格 token（URL 里 /base/ 后面那一串）",
+  "table_ids": {
+    "训练日": "tblXXXXXXXXXXXXXX",
+    "训练组": "tblXXXXXXXXXXXXXX",
+    "有氧": "tblXXXXXXXXXXXXXX",
+    "体测": "tblXXXXXXXXXXXXXX",
+    "训练计划": "tblXXXXXXXXXXXXXX"
+  }
+}
