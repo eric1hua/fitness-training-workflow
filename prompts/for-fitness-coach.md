@@ -23,19 +23,15 @@ https://raw.githubusercontent.com/eric1hua/fitness-training-workflow/main/refere
 
 这是唯一真源。下面列的是你这边**具体要改什么**，但判断标准以规范文档为准。
 
-### 第二步：四张表都加「录入agent」字段
+### 第二步：署名不用你管（但要知道它存在）
 
-`scripts/bitable_sync.py` 的 `map_record()` 有四个分支（set / session / cardio / body），
-**每个分支的字段 map 里都要加**：
+四张表都启用了飞书系统字段 `创建人`，按调用方的**应用身份**自动填。
 
-```python
-"录入agent": "rock@macmini",
-```
+你走 `inherit: openclaw` 用 Mac mini 的 `channels.feishu` 应用（`cli_a96d77f8…`），
+iMac 那边的 lark-cli 用的是另一个（`cli_aaac626d…`）——**两个不同的应用，所以这一列
+天然区分得开谁写的**。审计报告会直接显示它。
 
-这个字段是新加的，飞书表里已经建好。它的作用是出问题时能判断记录是哪个实现写的——
-现在 Base 里出了脏数据只能靠日期猜。
-
-写死 `rock@macmini` 就行，除非你想从 config 读。
+你要做的只有一件：**别往 payload 里塞 `创建人`**。系统字段不可写，塞了会被 API 拒。
 
 ### 第三步：补双向链接（这是你目前完全没有的能力）
 
@@ -119,6 +115,10 @@ A 侧的实现可以参考（`validate_record()`），逻辑不复杂：必填�
 ---
 
 ## 备注（不用发给 Rock）
+
+署名机制在 2026-08-06 改过一次：原本设计的是让每个 agent 写一个自定义的
+`录入agent` 字段，后来发现飞书系统字段「创建人」自动填、伪造不了、还能回填历史
+记录，于是整个拆掉了。规范和代码都已同步。
 
 规范里有两项待实测确认，会影响上面的措辞：
 

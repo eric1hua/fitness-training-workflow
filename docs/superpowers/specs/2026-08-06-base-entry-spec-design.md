@@ -60,11 +60,16 @@ data-entry-spec.md  ← 唯一真源
 删字段会连历史值一起没，且 B 的 `map_record()` 还在写它，不同步改会报错。
 保留不写，成本最低。
 
-**`录入agent` 是新增的核心字段。** 格式 `<agent>@<主机>`，四张表必填。
-没有它，审计报出违规也无法定位是哪个实现写的，只能靠日期猜。
+**署名用飞书系统字段 `创建人`，不自建字段。**（2026-08-06 修订，见文末）
+它按调用方的应用身份自动填。A 用 lark-cli 的 `cli_aaac626d…`，B 走
+`inherit: openclaw` 用 Mac mini 的 `cli_a96d77f8…`——**两个不同的应用**，
+所以这一列区分得开。审计报告直接展示它。
+
+限制：粒度是「应用」而非「agent」，同机器上共用一个应用的多个 agent 分不出来。
+排查录入问题需要的是「哪个实现」，这个粒度够。
 
 **`--fix` 只修有唯一正确答案的三类**（配速去单位、时间归一、总次数按当日训练组
-求和回填）。缺链接、缺 `录入agent`、`容量kg` 为空只报告——那些要么需要判断归属，
+求和回填）。缺链接、`容量kg` 为空只报告——那些要么需要判断归属，
 要么该由写入方补，自动猜一个填进去比空着更糟。
 
 **时间形状自适应。** `开始`/`结束` 是 DateTime 还是文本字段尚未实测。
@@ -108,7 +113,7 @@ dry-run 只警告不退出，保住"零配置也能预览请求体"这条性质�
 2. 训练日 `开始`/`结束` 是 DateTime 还是文本——决定 payload 形状。
    面向录入方的输入格式都是 `HH:MM`，不受影响
 
-另需在 Base 侧为四张表新增 `录入agent` 字段（写操作）。
+四张表的 `创建人` 系统字段已由用户在飞书里启用，无需代码侧动作。
 
 `lark-cli` 在 Claude Code 的 shell 里返回 `not_configured`（token 存 macOS
 keychain，非交互 shell 解不开），这三件事需要在 openclaw 环境里执行。
@@ -116,9 +121,35 @@ keychain，非交互 shell 解不开），这三件事需要在 openclaw 环境�
 ## 验证
 
 ```bash
-python3 scripts/fitness_lib.py --self-test    # 37 项
-python3 scripts/base_writer.py --self-test    # 42 项（原 13）
-python3 scripts/base_audit.py  --self-test    # 23 项
+python3 scripts/fitness_lib.py --self-test    # 54 项
+python3 scripts/base_writer.py --self-test    # 40 项（原 13）
+python3 scripts/base_audit.py  --self-test    # 21 项
 ```
 
 三个自检都不需要 `config.json`，不碰网络。
+
+## 2026-08-06 修订：署名机制
+
+初版设计了一个自定义字段 `录入agent`（`<agent>@<主机>`，四张表必填，值从
+`config.json` 的 `agent_id` 读）。实现完成并推送后，用户在飞书里启用了内置的
+`创建人` 系统字段，它自动记录写入方——初版方案随即被整个拆掉。
+
+系统字段在三个方面都更强：
+
+| | 自建 `录入agent` | 系统 `创建人` |
+|---|---|---|
+| 填写 | 每个实现自己记得写 | 自动 |
+| 可信 | 字符串，能写错也能伪造 | 由飞书按调用应用判定 |
+| 历史记录 | 只能从启用日往后有 | 建字段那一刻全部回填 |
+
+**前提是两个实现用不同的飞书应用**——否则这一列两边同值，区分不了。已验证：
+A 是 `cli_aaac626d…`，B 是 `cli_a96d77f8…`，不同。若哪天两边并到同一个应用，
+这个方案失效，得退回自建字段。
+
+拆除范围：`base_writer` 的 `AGENT_ID` 与三处 payload、`validate_record` 的必填
+清单、`config.json` 的 `agent_id`、规范与 schema 的对应条目、给 B 的 prompt
+第二步。`base_audit` 反过来**增加**了对 `创建人` 的展示——违规记录旁边直接
+标出是谁写的，这是初版没有的收益。
+
+同时新增 `SYSTEM_FIELDS` 常量与"系统字段不进 payload"的自检：系统字段不可写，
+塞值会被 API 拒。

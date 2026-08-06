@@ -52,7 +52,7 @@
 | 总容量kg | Number | sum(weight × reps)|
 | 组数明细 | Link → 训练组 | 双向 link |
 | 记录ID | Text | `session-YYYY-MM-DD` |
-| 录入agent | Text | 必填,`<agent>@<主机>`,如 `kepano@imac` |
+| 创建人 | 系统字段 | 飞书自动填(按调用应用),**不可写** |
 | 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | 自由文本 |
 
@@ -74,7 +74,7 @@
 | RPE | Number | 0-10 |
 | 容量kg | Number | `重量kg × 次数`,**要自己算并写入**(不是公式字段)|
 | 记录ID | Text | `set-YYYY-MM-DD-NNN`(NNN 从 001 起)|
-| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 创建人 | 系统字段 | 飞书自动填(按调用应用),**不可写** |
 | 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | 自由文本 |
 
@@ -92,7 +92,7 @@
 | 卡路里 | Number | kcal |
 | 配速 | Text | min/km(如「6:30」「11:49」) |
 | 记录ID | Text | `cardio-YYYY-MM-DD-NNN` |
-| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 创建人 | 系统字段 | 飞书自动填(按调用应用),**不可写** |
 | 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | |
 
@@ -116,7 +116,7 @@
 | 代谢年龄 | Number | |
 | 单选 | SingleSelect | (元数据字段) |
 | 记录ID | Text | `body-YYYY-MM-DD-NNN` |
-| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 创建人 | 系统字段 | 飞书自动填(按调用应用),**不可写** |
 | 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | |
 
@@ -179,7 +179,7 @@ lark-cli base +record-list \
 
 ### 写入流程(训练日 + N 训练组 + 有氧)
 
-优先用 `scripts/base_writer.py`(已封装续号、link 形状、容量计算、录入agent 署名,
+优先用 `scripts/base_writer.py`(已封装续号、link 形状、容量计算,
 以及按 `data-entry-spec.md` 的写入前校验)。手动写的话:
 
 ```bash

@@ -68,9 +68,9 @@ assets/templates/                 # 计划与日志的 Markdown 模板
 ## 自检
 
 ```bash
-python3 scripts/fitness_lib.py --self-test    # 37 项
-python3 scripts/base_writer.py --self-test    # 42 项
-python3 scripts/base_audit.py  --self-test    # 23 项
+python3 scripts/fitness_lib.py --self-test    # 54 项
+python3 scripts/base_writer.py --self-test    # 40 项
+python3 scripts/base_audit.py  --self-test    # 21 项
 ```
 
 三个自检都不需要 `config.json`。

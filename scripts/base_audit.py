@@ -20,8 +20,11 @@
   时间非 24 小时制  `上午11:30` → `11:30`
   总次数缺失       按当日训练组 `次数` 求和回填
 
-缺链接、缺「录入agent」、「容量kg」为空一律只报告 —— 那些要么需要判断归属,
-要么该由写入方补,自动猜一个填进去比空着更糟。
+缺链接、「容量kg」为空一律只报告 —— 那些要么需要判断归属,要么该由写入方补,
+自动猜一个填进去比空着更糟。
+
+报告里会带上飞书系统字段「创建人」,它按写入时的应用身份自动填。A 和 B 用的是
+两个不同的飞书应用,所以看一眼就知道违规记录出自哪个实现,不用猜。
 """
 import argparse
 import json
@@ -88,6 +91,20 @@ def _text(v) -> str:
     if isinstance(v, list):
         return "".join(seg.get("text", "") for seg in v if isinstance(seg, dict))
     return "" if v is None else str(v)
+
+
+def creator_of(fields: dict) -> str:
+    """飞书系统字段「创建人」→ 可读的名字。
+
+    这是写入方的署名,由飞书按调用应用自动填 —— agent 伪造不了,历史记录也有。
+    User 类型的 CellValue 形状不止一种(dict / [dict] / 纯文本),都兜住。
+    """
+    v = fields.get("创建人")
+    if isinstance(v, list):
+        v = v[0] if v else None
+    if isinstance(v, dict):
+        return v.get("name") or v.get("en_name") or v.get("id") or "?"
+    return _text(v) or "?"
 
 
 # === 可自动修复的三类 ===
@@ -158,7 +175,7 @@ def audit_table(table_key: str, records: list[dict], reps_lookup: dict) -> list[
     for r in records:
         f = dict(r["fields"])
         # 校验前把富文本摊平,不然「记录ID」这类会被当成 list 判成缺失
-        for k in ("记录ID", "录入agent", "备注", "配速", "动作", "开始", "结束"):
+        for k in ("记录ID", "备注", "配速", "动作", "开始", "结束"):
             if k in f:
                 f[k] = _text(f[k])
 
@@ -190,6 +207,7 @@ def audit_table(table_key: str, records: list[dict], reps_lookup: dict) -> list[
             findings.append({
                 "record_id": r["record_id"],
                 "记录ID": _text(f.get("记录ID")) or "<无记录ID>",
+                "创建人": creator_of(r["fields"]),
                 "issues": issues,
                 "fixes": fixes,
             })
@@ -256,20 +274,19 @@ def self_test() -> int:
     cardio = [{"record_id": "rec1", "fields": {
         "日期": "2026-07-29", "方式": "椭圆机", "距离km": 3.0, "时长min": 35,
         "配速": "11:41 /km", "记录ID": "cardio-2026-07-29-001",
-        "录入agent": "", "备注": ""}}]
+        "备注": "", "创建人": {"name": "Rock 同步机器人"}}}]
     got = audit_table("有氧", cardio, {})
     check("配速违规被认出且给出修法",
           got and got[0]["fixes"].get("配速") == "11:41", got)
-    check("缺 录入agent 只报不修",
-          any("录入agent" in i for i in got[0]["issues"])
-          and "录入agent" not in got[0]["fixes"], got[0])
+    check("创建人被带进报告(不校验,只展示)",
+          got[0]["创建人"] == "Rock 同步机器人", got[0].get("创建人"))
     check("椭圆机没记阻力被报出",
           any("阻力" in i for i in got[0]["issues"]), got[0]["issues"])
 
     session = [{"record_id": "rec2", "fields": {
         "日期": "2026-08-02", "主题": "腿", "开始": "11:30", "结束": "12:45",
         "时长min": 67, "总组数": 22, "总次数": None, "总容量kg": 11278,
-        "记录ID": "session-2026-08-02", "录入agent": "kepano@imac",
+        "记录ID": "session-2026-08-02",
         "组数明细": [{"id": "recX"}]}}]
     got = audit_table("训练日", session, {"2026-08-02": 240})
     check("总次数缺失被回填", got and got[0]["fixes"].get("总次数") == 240, got)
@@ -277,7 +294,7 @@ def self_test() -> int:
     session2 = [{"record_id": "rec3", "fields": {
         "日期": "2026-08-04", "主题": "腿", "开始": "上午11:30", "结束": "下午1:45",
         "时长min": 60, "总组数": 12, "总次数": 100, "总容量kg": 5000,
-        "记录ID": "session-2026-08-04", "录入agent": "kepano@imac",
+        "记录ID": "session-2026-08-04",
         "组数明细": [{"id": "recY"}]}}]
     got = audit_table("训练日", session2, {})
     check("12 小时制被归一(表内无证据 → datetime 形状)",
@@ -319,7 +336,7 @@ def main() -> int:
         print(f"\n=== {t} ({len(records)} 条记录,{len(findings)} 条有问题) ===")
 
         for x in findings:
-            print(f"  {x['记录ID']}")
+            print(f"  {x['记录ID']}  (创建人: {x['创建人']})")
             for issue in x["issues"]:
                 total_issues += 1
                 mark = "🔧" if any(k in issue for k in x["fixes"]) else "  "

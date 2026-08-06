@@ -6,6 +6,5 @@
     "有氧": "tblXXXXXXXXXXXXXX",
     "体测": "tblXXXXXXXXXXXXXX",
     "训练计划": "tblXXXXXXXXXXXXXX"
-  },
-  "agent_id": "填这个部署的标识，格式 <agent 名小写>@<主机短名>，如 kepano@imac"
+  }
 }
