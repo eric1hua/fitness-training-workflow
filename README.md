@@ -46,6 +46,7 @@ Obsidian 日志路径在 [`references/obsidian-path.md`](references/obsidian-pat
 ```
 SKILL.md                          # 主流程：三阶段 + 训练中 5 项反馈契约
 references/
+  data-entry-spec.md              # 录入规范（唯一真源）—— 多个 agent 写同一个 Base 时的契约
   base-schema.md                  # 飞书 Base 5 表 schema + CellValue 形状
   record-id-conventions.md        # 记录 ID 命名规则
   progressive-overload.md         # 渐进超负荷：为什么这么递进
@@ -55,7 +56,10 @@ references/
 scripts/
   fitness_lib.py                  # 训练算法（顶组递进 / 组内调整 / 部位决策 / 配重取整）
   workout_summary.py              # 日志解析 + 战绩卡 PNG（需要 Chrome headless）
-  base_writer.py                  # 飞书 Base 写入（ID 续号 / link 形状 / 只读字段过滤）
+  base_writer.py                  # 飞书 Base 写入（ID 续号 / link 形状 / 容量计算 / 写入前校验）
+  base_audit.py                   # 按规范审计 Base，--fix 修可确定的违规
+prompts/
+  for-fitness-coach.md            # 给另一个实现的对齐要求
 assets/templates/                 # 计划与日志的 Markdown 模板
 ```
 
@@ -65,10 +69,26 @@ assets/templates/                 # 计划与日志的 Markdown 模板
 
 ```bash
 python3 scripts/fitness_lib.py --self-test    # 37 项
-python3 scripts/base_writer.py --self-test    # 13 项
+python3 scripts/base_writer.py --self-test    # 42 项
+python3 scripts/base_audit.py  --self-test    # 23 项
 ```
 
-两个自检都不需要 `config.json`。
+三个自检都不需要 `config.json`。
+
+## 多个 agent 写同一个 Base
+
+这个 skill 不是唯一往飞书 Base 写数据的实现。规范、写入前校验、写入后审计三件套
+就是为此存在的：
+
+- [`references/data-entry-spec.md`](references/data-entry-spec.md) 是唯一真源
+- `base_writer.py` 在写入前按规范校验，违规直接中止
+- `base_audit.py` 查的是 **Base 本身**，所以在任意一台机器上跑一次，就覆盖了
+  所有写入方的数据，包括历史脏数据
+
+```bash
+python3 scripts/base_audit.py --fix --dry-run   # 看要修什么
+python3 scripts/base_audit.py --fix             # 修配速单位 / 时间格式 / 总次数缺失
+```
 
 ## 已知未定项
 

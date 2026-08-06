@@ -127,8 +127,11 @@ revision_note: "P0/P1/P2 修复：报告解析器重写（按动作名配对、�
    - 时长 ≥ 各组时间累计
    - **顶组完整度**：每个动作至少 1 条顶组记录，否则标 ⚠️
 3. 三写：
-   - 飞书 Base —— 走 `scripts/base_writer.py`（已封装 ID 续号、link 形状、公式字段过滤）。
-     真写之前先 `--dry-run` 看一眼请求体
+   - 飞书 Base —— 走 `scripts/base_writer.py`（已封装 ID 续号、link 形状、容量计算、
+     `录入agent` 署名，以及按 `references/data-entry-spec.md` 的写入前校验）。
+     真写之前先 `--dry-run` 看一眼请求体。
+     **这个 Base 有多个 agent 在写，录入规范是硬约束**——违规会被拦下不写，
+     不要绕过校验去手搓 lark-cli
    - Obsidian 健身日志 —— 路径与结构见 `references/obsidian-path.md`
    - 本地缓存 `<WORKSPACE>/fitness/sessions/YYYY-MM-DD.md`
 4. 生成训练报告 —— `python3 scripts/workout_summary.py --date YYYY-MM-DD --output <path>`
@@ -173,6 +176,8 @@ revision_note: "P0/P1/P2 修复：报告解析器重写（按动作名配对、�
 
 ## References / 详细文档
 
+- `references/data-entry-spec.md` —— **录入规范（唯一真源）**。四张表的字段格式与
+  必填性。这个 Base 有多个独立实现在写，规范是它们之间的契约
 - `references/base-schema.md` —— 飞书 Base 5 表 schema + **真实 table_id** + CellValue 形状
 - `references/record-id-conventions.md` —— 记录 ID 命名规则（记录 ID 的唯一出处）
 - `references/progressive-overload.md` —— 渐进超负荷的设计意图
@@ -200,13 +205,17 @@ revision_note: "P0/P1/P2 修复：报告解析器重写（按动作名配对、�
      别改回按行高常量估算——文字一换行就裁内容。
   4. 颜色是 iOS 系统色且带语义：蓝=数据/首练，绿=突破，橙=偏重/提醒，红=力竭/跳过；
      RPE 按数值分档上色（≤7 绿 / 8 橙 / ≥9 红）。
-- `scripts/base_writer.py` —— 飞书 Base 写入（ID 续号、link 形状、公式字段过滤）
+- `scripts/base_writer.py` —— 飞书 Base 写入（ID 续号、link 形状、容量计算、
+  `录入agent` 署名、写入前的规范校验）
+- `scripts/base_audit.py` —— 按规范审计 Base，`--fix` 修可确定的违规。
+  **查的是 Base 不是本地，所以一次就覆盖所有写入方**（含另一台机器的 fitness-coach）
 
-三个脚本都有自检，改完跑一遍：
+四个脚本都有自检，改完跑一遍：
 
 ```bash
 python3 scripts/fitness_lib.py --self-test      # 37 项
-python3 scripts/base_writer.py --self-test      # 13 项
+python3 scripts/base_writer.py --self-test      # 42 项
+python3 scripts/base_audit.py  --self-test      # 23 项
 python3 scripts/workout_summary.py --date <YYYY-MM-DD> --dump   # 看解析结果
 ```
 

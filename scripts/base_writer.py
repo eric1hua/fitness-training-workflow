@@ -42,6 +42,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fitness_lib  # noqa: E402  —— 肌群/类别 的领域知识只此一份,不在这里复制一遍
+
 # 飞书 Base 配置 —— 从 config.json 读(照着 config.example.json 填自己的)。
 # 不硬编码:表 token 和 table_id 是每个人自己的,写死了别人 clone 下来就得改源码。
 CONFIG_PATH = Path(
@@ -60,6 +63,10 @@ _CFG = _load_config()
 BASE_TOKEN = _CFG.get("base_token", "")
 APP_TOKEN = BASE_TOKEN
 
+# 每条记录的署名。多个实现在往同一个 Base 写,不署名就无法追溯是谁写的。
+# 格式 <agent 名小写>@<主机短名>,见 references/data-entry-spec.md。
+AGENT_ID = os.environ.get("FITNESS_AGENT_ID") or _CFG.get("agent_id", "")
+
 # 飞书表 ID(查法:`lark-cli base +base-block-list --type table`)
 # 没配置时留占位值,好让 --dry-run / --self-test 在零配置下仍然跑得通;
 # 真发请求前由 require_config() 拦下来。
@@ -75,19 +82,177 @@ def require_config() -> None:
             "复制 config.example.json 为 config.json,填上你自己的 base_token 和 table_ids。\n"
             "table_id 查法:lark-cli base +base-block-list --base-token <你的token> --type table"
         )
+    if not AGENT_ID:
+        sys.exit(
+            f"config.json 缺 agent_id(或设环境变量 FITNESS_AGENT_ID)。\n"
+            "格式 <agent 名小写>@<主机短名>,如 kepano@imac。\n"
+            "没有署名的记录不该进 Base —— 出问题时无法判断是哪个实现写的。"
+        )
 
-# 只读字段,永远不进写入 payload
-READONLY_FIELDS = {"容量kg"}
+# === 录入规范校验(references/data-entry-spec.md 的可执行形式)===
+#
+# 规则改动先改文档,再改这里。两处不一致时以文档为准。
+
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_PACE_RE = re.compile(r"^[0-5]?\d:[0-5]\d$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# 表 → 必填字段。link 字段单列,因为它们的空值形状是 [] 而不是 ""。
+_REQUIRED = {
+    "训练日": ["日期", "主题", "开始", "结束", "时长min", "总组数", "总次数",
+              "总容量kg", "记录ID", "录入agent"],
+    "训练组": ["日期", "动作", "肌群", "类别", "组类型", "组序", "重量kg", "次数",
+              "容量kg", "记录ID", "录入agent"],
+    "有氧":   ["日期", "方式", "距离km", "时长min", "配速", "记录ID", "录入agent"],
+    "体测":   ["日期", "体重kg", "记录ID", "录入agent"],
+}
+
+_REQUIRED_LINKS = {"训练日": ["组数明细"], "训练组": ["训练日"]}
+
+# 有氧:这些方式的备注里必须出现对应关键词。同样的距离时长,坡度阻力不同强度差很远。
+_CARDIO_NOTE_REQUIRED = {"跑步": "坡度", "椭圆机": "阻力"}
+
+
+def _time_part(value: str) -> str | None:
+    """从时间值里取出 HH:MM,取不出返回 None。
+
+    接受两种形式,因为它们是同一个东西的两个层次:
+      - `11:30`               —— 规范面向录入方的输入格式
+      - `2026-08-02 11:30:00` —— 飞书 DateTime 字段的 CellValue 形状
+
+    `开始`/`结束` 究竟是 DateTime 还是文本字段尚未实测(见 data-entry-spec.md
+    「待验证」)。确认是文本后,fmt_datetime() 可以去掉,这里的第二种形式也随之消失。
+
+    `上午11:30`、`11:30 AM`、`9:5` 这类一律取不出 —— 那才是要拦的东西。
+    """
+    s = value.strip()
+    if _HHMM_RE.match(s):
+        return s
+    m = re.match(r"^\d{4}-\d{2}-\d{2}[ T](([01]\d|2[0-3]):[0-5]\d)(:[0-5]\d)?$", s)
+    return m.group(1) if m else None
+
+
+def validate_record(table_key: str, fields: dict) -> list[str]:
+    """按录入规范校验单条记录,返回违规说明列表(空 = 合规)。
+
+    纯函数,不碰网络,所以进得了 --self-test。
+    """
+    issues = []
+
+    for name in _REQUIRED.get(table_key, []):
+        v = fields.get(name)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            issues.append(f"缺必填字段「{name}」")
+
+    for name in _REQUIRED_LINKS.get(table_key, []):
+        if not fields.get(name):
+            issues.append(f"缺必填链接「{name}」—— 只挂一边等于没挂")
+
+    d = fields.get("日期")
+    if isinstance(d, str) and d and not _DATE_RE.match(d):
+        issues.append(f"「日期」应为 YYYY-MM-DD,得到 {d!r}")
+
+    if table_key == "训练日":
+        for name in ("开始", "结束"):
+            v = fields.get(name)
+            if isinstance(v, str) and v and _time_part(v) is None:
+                issues.append(
+                    f"「{name}」应为 HH:MM 24 小时制,得到 {v!r}")
+
+    if table_key == "训练组":
+        w, r, vol = fields.get("重量kg"), fields.get("次数"), fields.get("容量kg")
+        if all(isinstance(x, (int, float)) for x in (w, r, vol)):
+            expect = calc_volume(w, r)
+            if abs(vol - expect) > 0.05:
+                issues.append(f"「容量kg」={vol} 与 重量kg×次数={expect} 不符")
+
+    if table_key == "有氧":
+        pace = fields.get("配速")
+        if isinstance(pace, str) and pace and not _PACE_RE.match(pace.strip()):
+            issues.append(f"「配速」应为 MM:SS 且不带单位,得到 {pace!r}")
+        kw = _CARDIO_NOTE_REQUIRED.get(str(fields.get("方式") or ""))
+        if kw and kw not in str(fields.get("备注") or ""):
+            issues.append(f"方式为「{fields.get('方式')}」时,备注必须记{kw}")
+
+    return issues
+
+
+def calc_volume(weight_kg: float, reps: int) -> float:
+    """训练组容量。Base 里 `容量kg` **不是公式字段**,不写就是整列为空。
+
+    此前 base-schema.md 记载它是 Formula,本脚本据此把它过滤掉了
+    (READONLY_FIELDS),结果这台机器写的组记录容量全空。记载是错的。
+    """
+    return round(float(weight_kg) * int(reps), 1)
 
 
 class BaseWriteError(RuntimeError):
     """写入前置校验失败(ID 冲突等)。"""
 
 
+def _arg_value(args: list, flag: str):
+    """取 args 里 flag 的下一个值,没有则 None。"""
+    try:
+        return args[args.index(flag) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def enforce_spec(args: list, dry_run: bool = False) -> None:
+    """发请求前按录入规范校验 payload。真写违规则退出;dry-run 只警告。
+
+    只校验**新建**:带 --record-id 的是局部更新(如回填 link),字段本来就不全,
+    拿整表的必填清单去卡它只会误报。
+
+    dry-run 不硬退出,是为了保住「零配置也能预览请求体」——没有 config.json 时
+    AGENT_ID 为空,必然报缺「录入agent」,那不该妨碍你看 payload 长什么样。
+    """
+    payload_raw = _arg_value(args, "--json")
+    if payload_raw is None or _arg_value(args, "--record-id") is not None:
+        return
+
+    table_id = _arg_value(args, "--table-id")
+    table_key = {v: k for k, v in TABLE_IDS.items()}.get(table_id)
+    if table_key is None:
+        return  # 不认识的表,不拦
+
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError:
+        return  # 交给 lark-cli 自己报
+
+    if isinstance(payload, dict) and "update_records" in payload:
+        return  # 批量更新也是局部的,同 --record-id 的道理
+
+    records = payload.get("create_records") if isinstance(payload, dict) else None
+    if records is None:
+        records = [payload]
+
+    problems = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        for issue in validate_record(table_key, rec):
+            problems.append(f"  {rec.get('记录ID', '<无记录ID>')}: {issue}")
+
+    if not problems:
+        return
+    msg = (
+        f"录入规范校验未通过({table_key},{len(problems)} 项):\n"
+        + "\n".join(problems)
+        + "\n规范见 references/data-entry-spec.md。"
+    )
+    if dry_run:
+        print(f"⚠️  {msg}\n(dry-run,不阻止;真写会被拦下)", file=sys.stderr)
+    else:
+        sys.exit(msg)
+
+
 def run_lark_cli(args: list, dry_run: bool = False) -> dict:
     """运行 lark-cli 命令,返回 JSON(dry-run 返回 placeholder 让下游继续)"""
     if not dry_run:
         require_config()
+    enforce_spec(args, dry_run)
     cmd = ["lark-cli"] + args
     if dry_run:
         cmd.append("--dry-run")
@@ -123,11 +288,19 @@ def gen_body_id(d: date, nnn: int) -> str:
 
 
 def fmt_datetime(d: date, hhmm: str) -> str:
-    """飞书 datetime CellValue:'YYYY-MM-DD HH:MM:SS'。"""
-    hhmm = hhmm.strip()
-    if len(hhmm.split(":")) == 2:
-        hhmm += ":00"
-    return f"{d.isoformat()} {hhmm}"
+    """飞书 datetime CellValue:'YYYY-MM-DD HH:MM:SS'。
+
+    输入必须是 24 小时制 HH:MM(H:MM 会补零)。2026-08-04 那条 12 小时制的记录
+    就是从这里漏进去的 —— 之前这个函数对输入不设防,拿到什么就拼什么。
+    """
+    s = hhmm.strip()
+    m = re.match(r"^(\d{1,2}):([0-5]\d)$", s)
+    if not m or int(m.group(1)) > 23:
+        raise ValueError(
+            f"时间应为 24 小时制 HH:MM,得到 {hhmm!r}。"
+            "「上午11:30」「11:30 AM」这类先转成 11:30 再传。"
+        )
+    return f"{d.isoformat()} {int(m.group(1)):02d}:{m.group(2)}:00"
 
 
 # === 序号续号(record-id-conventions.md 第 5 节)===
@@ -209,6 +382,7 @@ def build_session_fields(
         "总次数": total_reps,
         "总容量kg": total_volume_kg,
         "记录ID": gen_session_id(session_date),
+        "录入agent": AGENT_ID,
         "备注": notes,
     }
 
@@ -228,22 +402,35 @@ def build_set_records(
         action = s["动作"]
         per_action_count[action] = per_action_count.get(action, 0) + 1
 
+        # 肌群/类别 认不出来就报错,不要静默填空串 —— 空肌群会让递进步长按小肌群
+        # 算(+1kg 而非 +2.5kg),部位轮换也判不出练过什么。宁可现在停下来问。
+        muscle = s.get("肌群") or fitness_lib.muscle_of(action)
+        if not muscle:
+            raise BaseWriteError(
+                f"认不出动作「{action}」的肌群。在 sets 里显式给「肌群」,"
+                f"或把它加进 fitness_lib.ACTION_MUSCLE。"
+            )
+        category = s.get("类别") or fitness_lib.category_of(muscle)
+        if not category:
+            raise BaseWriteError(f"肌群「{muscle}」没有对应的类别,检查 MUSCLE_CATEGORY。")
+
         rec = {
             "日期": session_date.isoformat(),
             "训练日": [{"id": session_record_id}],      # link CellValue
             "动作": action,
-            "肌群": s.get("肌群", ""),
-            "类别": s.get("类别", ""),
+            "肌群": muscle,
+            "类别": category,
             "组类型": s.get("组类型", "正式"),
             "组序": per_action_count[action],
             "重量kg": s["重量kg"],
             "次数": s["次数"],
             "RPE": s.get("RPE", 0),
+            "容量kg": calc_volume(s["重量kg"], s["次数"]),
             "记录ID": gen_set_id(session_date, start_seq + i),
+            "录入agent": AGENT_ID,
             "备注": s.get("备注", ""),
         }
-        # 容量kg 是公式字段,写了会被拒
-        records.append({k: v for k, v in rec.items() if k not in READONLY_FIELDS})
+        records.append(rec)
 
     return records
 
@@ -261,6 +448,7 @@ def build_cardio_fields(
         "卡路里": calories,
         "配速": pace,
         "记录ID": gen_cardio_id(cardio_date, seq),
+        "录入agent": AGENT_ID,
         "备注": notes,
     }
 
@@ -509,7 +697,10 @@ def self_test() -> int:
         {"动作": "腿屈伸", "重量kg": 66.5, "次数": 12, "RPE": 8, "组类型": "正式"},
     ]
     recs = build_set_records(d, "recABC", sets, start_seq=4)
-    check("不含公式字段 容量kg", all("容量kg" not in r for r in recs))
+    check("容量kg 已写入(不是公式字段,不写就整列空)",
+          [r["容量kg"] for r in recs] == [850.0, 900.0, 798.0],
+          [r.get("容量kg") for r in recs])
+    check("容量小数保留 1 位", calc_volume(37.5, 7) == 262.5, calc_volume(37.5, 7))
     check("记录ID 从 start_seq 续号", [r["记录ID"] for r in recs] ==
           ["set-2026-08-02-004", "set-2026-08-02-005", "set-2026-08-02-006"],
           [r["记录ID"] for r in recs])
@@ -526,6 +717,99 @@ def self_test() -> int:
     f = build_session_fields(d, "腿", 11278, 22, 240, 67, "11:30", "12:45")
     check("记录ID 正确", f["记录ID"] == "session-2026-08-02")
     check("开始时间格式", f["开始"] == "2026-08-02 11:30:00", f["开始"])
+
+    print("录入agent 署名:")
+    check("训练日 payload 带 录入agent", "录入agent" in f)
+    check("训练组 payload 带 录入agent", all("录入agent" in r for r in recs))
+    check("有氧 payload 带 录入agent",
+          "录入agent" in build_cardio_fields(d, 1, "跑步", 5.0, 30, 140, 300, "6:00"))
+
+    print("构造出来的 payload 必须过得了自己的校验:")
+    # 这条是端到端的:分开测 build_* 和 validate_record 都会绿,但真实链路上
+    # build 的产物要经 enforce_spec 再发出去。少了这条,fmt_datetime 输出完整
+    # datetime 而校验只认 HH:MM 的矛盾就会一路漏到线上。
+    _saved_agent = globals()["AGENT_ID"]
+    globals()["AGENT_ID"] = "kepano@imac"
+    try:
+        s_fields = build_session_fields(d, "腿", 11278, 22, 240, 67, "11:30", "12:45")
+        s_fields["组数明细"] = [{"id": "recX"}]
+        check("训练日 build → validate 零违规",
+              validate_record("训练日", s_fields) == [],
+              validate_record("训练日", s_fields))
+        s_recs = build_set_records(d, "recABC", sets, start_seq=4)
+        set_issues = [i for r in s_recs for i in validate_record("训练组", r)]
+        check("训练组 build → validate 零违规", set_issues == [], set_issues)
+        c_fields = build_cardio_fields(
+            d, 1, "椭圆机", 3.2, 30, 128, 260, "11:41", "阻力 8")
+        check("有氧 build → validate 零违规",
+              validate_record("有氧", c_fields) == [],
+              validate_record("有氧", c_fields))
+    finally:
+        globals()["AGENT_ID"] = _saved_agent
+
+    print("fmt_datetime 入口设防:")
+    for bad in ("上午11:30", "11:30 AM", "9:5", "25:00"):
+        try:
+            fmt_datetime(d, bad)
+            check(f"拒绝 {bad!r}", False, "没抛异常")
+        except ValueError:
+            check(f"拒绝 {bad!r}", True)
+    check("H:MM 补零", fmt_datetime(d, "9:05") == "2026-08-02 09:05:00",
+          fmt_datetime(d, "9:05"))
+
+    print("录入规范校验:")
+    agent = "kepano@imac"
+    ok_set = {
+        "日期": "2026-08-02", "动作": "倒蹬 45°", "肌群": "股四", "类别": "腿",
+        "组类型": "顶组", "组序": 1, "重量kg": 90, "次数": 10, "容量kg": 900.0,
+        "记录ID": "set-2026-08-02-001", "录入agent": agent,
+        "训练日": [{"id": "recABC"}],
+    }
+    check("合规训练组零违规", validate_record("训练组", ok_set) == [],
+          validate_record("训练组", ok_set))
+    check("容量对不上被抓出",
+          any("容量kg" in x for x in validate_record("训练组", {**ok_set, "容量kg": 123})))
+    check("缺 训练日 link 被抓出",
+          any("训练日" in x for x in validate_record("训练组", {**ok_set, "训练日": []})))
+    check("缺 录入agent 被抓出",
+          any("录入agent" in x for x in validate_record("训练组", {**ok_set, "录入agent": ""})))
+
+    ok_session = {
+        "日期": "2026-08-02", "主题": "腿", "开始": "11:30", "结束": "12:45",
+        "时长min": 67, "总组数": 22, "总次数": 240, "总容量kg": 11278,
+        "记录ID": "session-2026-08-02", "录入agent": agent,
+        "组数明细": [{"id": "recX"}],
+    }
+    check("合规训练日零违规", validate_record("训练日", ok_session) == [],
+          validate_record("训练日", ok_session))
+    for bad in ("上午11:30", "11:30 AM", "9:5", "11:30/12:45"):
+        check(f"开始={bad!r} 被抓出",
+              any("开始" in x for x in validate_record("训练日", {**ok_session, "开始": bad})))
+    check("DateTime CellValue 形状被接受(字段类型未定,两种都得认)",
+          validate_record("训练日", {**ok_session, "开始": "2026-08-02 11:30:00"}) == [])
+    check("总次数缺失被抓出",
+          any("总次数" in x for x in
+              validate_record("训练日", {**ok_session, "总次数": None})))
+    check("缺 组数明细 被抓出",
+          any("组数明细" in x for x in
+              validate_record("训练日", {**ok_session, "组数明细": []})))
+
+    ok_cardio = {
+        "日期": "2026-08-02", "方式": "椭圆机", "距离km": 3.2, "时长min": 30,
+        "配速": "11:41", "记录ID": "cardio-2026-08-02-001", "录入agent": agent,
+        "备注": "阻力 8",
+    }
+    check("合规有氧零违规", validate_record("有氧", ok_cardio) == [],
+          validate_record("有氧", ok_cardio))
+    check("配速带单位被抓出",
+          any("配速" in x for x in validate_record("有氧", {**ok_cardio, "配速": "11:41 /km"})))
+    check("椭圆机备注没记阻力被抓出",
+          any("阻力" in x for x in validate_record("有氧", {**ok_cardio, "备注": ""})))
+    check("跑步备注没记坡度被抓出",
+          any("坡度" in x for x in
+              validate_record("有氧", {**ok_cardio, "方式": "跑步", "备注": "跑步机 2 号"})))
+    check("步行不强制备注",
+          validate_record("有氧", {**ok_cardio, "方式": "步行", "备注": ""}) == [])
 
     print()
     if failures:

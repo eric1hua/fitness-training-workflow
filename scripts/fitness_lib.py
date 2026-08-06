@@ -106,6 +106,21 @@ def muscle_of(action: str) -> str | None:
     return None
 
 
+# 肌群 → Base「训练组.类别」单选值。
+# 「臂」在 TOPIC_MUSCLES 里同属推和拉,但类别选项本身就有「肩」「臂」两项,
+# 直接映到自己即可,歧义自然消失。
+MUSCLE_CATEGORY = {
+    "胸": "推", "背": "拉",
+    "股四": "腿", "腘绳": "腿", "臀": "腿", "小腿": "腿",
+    "肩": "肩", "臂": "臂", "核心": "核心",
+}
+
+
+def category_of(muscle: str | None) -> str | None:
+    """肌群 → 训练组.类别。认不出返回 None。"""
+    return MUSCLE_CATEGORY.get(muscle or "")
+
+
 def is_large_muscle(action: str) -> bool | None:
     """是否大肌群。认不出动作时返回 None。"""
     m = muscle_of(action)

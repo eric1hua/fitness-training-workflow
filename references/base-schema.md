@@ -1,5 +1,8 @@
 # 飞书 Base Schema 参考
 
+> **录入规范见 `data-entry-spec.md`** —— 那里是字段格式与必填性的唯一真源,
+> 本文只描述表结构。多个 agent 在写这个 Base,两份文档要一起读。
+
 > **数据源**:飞书多维表格 token `<YOUR_BASE_TOKEN>`
 > **blocks**:11 个(5 表 + 1 workflow + 5 dashboards)
 > **录入工具**:lark-cli `base` 域(优先)/ 原生 `feishu_bitable_*`(备援)
@@ -31,7 +34,7 @@
 | 日期 | Date | YYYY-MM-DD |
 | 主题 | SingleSelect | 推/拉/腿/上肢/下肢/全身/有氧 |
 | 计划动作 | LongText | Markdown 表格(含上次顶组)|
-| 训练者 | User | 用户 |
+| 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 
 ---
 
@@ -49,7 +52,8 @@
 | 总容量kg | Number | sum(weight × reps)|
 | 组数明细 | Link → 训练组 | 双向 link |
 | 记录ID | Text | `session-YYYY-MM-DD` |
-| 训练者 | User | 用户 |
+| 录入agent | Text | 必填,`<agent>@<主机>`,如 `kepano@imac` |
+| 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | 自由文本 |
 
 ---
@@ -68,9 +72,10 @@
 | 重量kg | Number | 杠铃/器械重 |
 | 次数 | Number | reps |
 | RPE | Number | 0-10 |
-| 容量kg | Formula | weight × reps |
+| 容量kg | Number | `重量kg × 次数`,**要自己算并写入**(不是公式字段)|
 | 记录ID | Text | `set-YYYY-MM-DD-NNN`(NNN 从 001 起)|
-| 训练者 | User | 用户 |
+| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | 自由文本 |
 
 ---
@@ -87,7 +92,8 @@
 | 卡路里 | Number | kcal |
 | 配速 | Text | min/km(如「6:30」「11:49」) |
 | 记录ID | Text | `cardio-YYYY-MM-DD-NNN` |
-| 训练者 | User | 用户 |
+| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | |
 
 ---
@@ -110,7 +116,8 @@
 | 代谢年龄 | Number | |
 | 单选 | SingleSelect | (元数据字段) |
 | 记录ID | Text | `body-YYYY-MM-DD-NNN` |
-| 训练者 | User | 用户 |
+| 录入agent | Text | 必填,`<agent>@<主机>` |
+| 训练者 | User | **已废弃**,不再写(每个训练者各自一张表)|
 | 备注 | LongText | |
 
 ---
@@ -172,8 +179,8 @@ lark-cli base +record-list \
 
 ### 写入流程(训练日 + N 训练组 + 有氧)
 
-优先用 `scripts/base_writer.py`(已封装续号、link 形状、公式字段过滤)。
-手动写的话:
+优先用 `scripts/base_writer.py`(已封装续号、link 形状、容量计算、录入agent 署名,
+以及按 `data-entry-spec.md` 的写入前校验)。手动写的话:
 
 ```bash
 # 1. 创建训练日(--json 收顶层字段 map,不要包 fields;不带 --record-id = 新建)
@@ -196,10 +203,16 @@ lark-cli base +record-batch-create \
 | datetime(开始/结束) | `"2026-08-01 11:30:00"` | `"2026-08-01T11:30:00+08:00"` |
 | link(训练日/组数明细) | `[{"id":"recXXX"}]` | `["recXXX"]` |
 | 单选(主题/组类型) | `"腿"` | — |
-| **公式(容量kg)** | **不可写,别放进 payload** | 当普通数字字段塞值 |
+| 数字(容量kg) | `900.0` | **当成公式字段过滤掉,整列写空** |
 
 公式 / lookup / 附件 / 系统字段一律不可写 —— lark-cli 的 `--help` 里也明确写了这条。
-`容量kg` 由 Base 自己按 `重量kg × 次数` 算。
+
+> ⚠️ **`容量kg` 不在此列。** 本文此前记它是 Formula,`base_writer.py` 据此把它
+> 加进 `READONLY_FIELDS` 过滤掉,结果这台机器写的组记录容量整列为空 ——
+> 而另一台机器上的 fitness-coach 一直正常写着它。记载是错的,已订正:
+> 这是普通数字字段,**必须自己算 `重量kg × 次数` 并写入**。
+>
+> 教训:字段类型以 `lark-cli base +field-list` 实测为准,不要以本文为准。
 
 ---
 
